@@ -1,11 +1,30 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export function MarketingNavbar() {
+  const [isScrolled, setIsScrolled] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsScrolled(window.scrollY > 20);
+    };
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 h-16 border-b border-border bg-background">
+    <header 
+      className={cn(
+        "fixed top-0 left-0 right-0 z-50 border-b border-border/40 transition-all duration-300 ease-in-out",
+        isScrolled 
+          ? "h-13 bg-[#090909]/75 backdrop-blur-md border-border/80 shadow-md shadow-black/10" 
+          : "h-16 bg-[#090909]"
+      )}
+    >
       <div className="max-w-6xl mx-auto h-full px-4 flex items-center justify-between">
         {/* Logo */}
         <Link href="/" className="flex items-center gap-2 hover:opacity-90 transition-opacity">
