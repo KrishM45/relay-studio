@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "framer-motion";
+import { ResearchView, ResearchNav } from "@/components/Research/ResearchView";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -46,7 +47,7 @@ export default function WorkspacePage({ params }: PageProps) {
   const [scripts, setScripts] = useState<GeneratedScript[]>([]);
   
   // Interactive UI States
-  const [activeTab, setActiveTab] = useState<"references" | "notes" | "script">("references");
+  const [activeTab, setActiveTab] = useState<"research" | "references" | "insights" | "create">((searchParams.get("tab") as "research" | "references" | "insights" | "create") || "research");
   const [isAddingTopic, setIsAddingTopic] = useState(false);
   const [newTopicTitle, setNewTopicTitle] = useState("");
   const [isAddingRef, setIsAddingRef] = useState(false);
@@ -308,12 +309,24 @@ export default function WorkspacePage({ params }: PageProps) {
           {selectedTopic ? (
             <>
               {/* Tabs Controller */}
-              <div className="h-10 border-b border-border bg-card/5 flex items-center justify-between px-4 select-none shrink-0">
+              <div className="h-10 border-b border-border bg-card/5 flex items-center justify-between px-4 select-none shrink-0 overflow-x-auto no-scrollbar">
                 <div className="flex items-center gap-1.5">
+                  <button 
+                    onClick={() => setActiveTab("research")}
+                    className={cn(
+                      "h-10 px-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors whitespace-nowrap",
+                      activeTab === "research" 
+                        ? "border-primary text-foreground" 
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-primary" />
+                    <span>Research</span>
+                  </button>
                   <button 
                     onClick={() => setActiveTab("references")}
                     className={cn(
-                      "h-10 px-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors",
+                      "h-10 px-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors whitespace-nowrap",
                       activeTab === "references" 
                         ? "border-primary text-foreground" 
                         : "border-transparent text-muted-foreground hover:text-foreground"
@@ -323,28 +336,28 @@ export default function WorkspacePage({ params }: PageProps) {
                     <span>References ({references.length})</span>
                   </button>
                   <button 
-                    onClick={() => setActiveTab("notes")}
+                    onClick={() => setActiveTab("insights")}
                     className={cn(
-                      "h-10 px-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors",
-                      activeTab === "notes" 
+                      "h-10 px-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors whitespace-nowrap",
+                      activeTab === "insights" 
                         ? "border-primary text-foreground" 
                         : "border-transparent text-muted-foreground hover:text-foreground"
                     )}
                   >
                     <BrainCircuit className="w-3.5 h-3.5 text-primary" />
-                    <span>Research Notes</span>
+                    <span>Insights</span>
                   </button>
                   <button 
-                    onClick={() => setActiveTab("script")}
+                    onClick={() => setActiveTab("create")}
                     className={cn(
-                      "h-10 px-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors",
-                      activeTab === "script" 
+                      "h-10 px-3 text-xs font-semibold border-b-2 flex items-center gap-1.5 transition-colors whitespace-nowrap",
+                      activeTab === "create" 
                         ? "border-primary text-foreground" 
                         : "border-transparent text-muted-foreground hover:text-foreground"
                     )}
                   >
                     <FileText className="w-3.5 h-3.5" />
-                    <span>Script Builder</span>
+                    <span>Create</span>
                   </button>
                 </div>
 
@@ -359,7 +372,7 @@ export default function WorkspacePage({ params }: PageProps) {
                     <span>Add Reference</span>
                   </Button>
                 )}
-                {activeTab === "notes" && (
+                {activeTab === "insights" && (
                   <Button 
                     size="sm" 
                     className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold flex items-center gap-1"
@@ -367,10 +380,10 @@ export default function WorkspacePage({ params }: PageProps) {
                     disabled={isSaving}
                   >
                     <Save className="w-3 h-3" />
-                    <span>Save Note</span>
+                    <span>Save Insights</span>
                   </Button>
                 )}
-                {activeTab === "script" && (
+                {activeTab === "create" && (
                   <Button 
                     size="sm" 
                     className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold flex items-center gap-1"
@@ -383,9 +396,20 @@ export default function WorkspacePage({ params }: PageProps) {
                 )}
               </div>
 
+              {/* Research Section Navigation Strip — sits between tabs and scroll area */}
+              {activeTab === "research" && <ResearchNav />}
+
               {/* Scrollable Tab Views */}
-              <div className="flex-1 overflow-y-auto p-4 md:p-6">
+              <div className={cn(
+                "flex-1 overflow-y-auto",
+                activeTab === "research" ? "p-4 md:p-6" : "p-4 md:p-6"
+              )}>
                 
+                {/* 0. Research tab (New) */}
+                {activeTab === "research" && (
+                  <ResearchView />
+                )}
+
                 {/* 1. References tab */}
                 {activeTab === "references" && (
                   <div className="space-y-4">
@@ -517,8 +541,8 @@ export default function WorkspacePage({ params }: PageProps) {
                    </div>
                  )}
 
-                 {/* 2. Research Notes tab */}
-                 {activeTab === "notes" && (
+                 {/* 2. Insights tab (formerly Notes) */}
+                {activeTab === "insights" && (
                    <div className="space-y-4 h-full flex flex-col py-2">
                      <input 
                        type="text" 
@@ -536,8 +560,8 @@ export default function WorkspacePage({ params }: PageProps) {
                    </div>
                  )}
 
-                 {/* 3. Script Builder tab */}
-                 {activeTab === "script" && (
+                 {/* 3. Create tab (formerly Script) */}
+                {activeTab === "create" && (
                    <div className="space-y-4 h-full flex flex-col py-2">
                      <input 
                        type="text" 
