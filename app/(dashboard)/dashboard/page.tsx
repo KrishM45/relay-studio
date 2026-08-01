@@ -1,49 +1,83 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { 
-  Search, 
-  Link2, 
-  Pin, 
-  FolderClosed, 
-  ArrowRight, 
-  Sparkles, 
-  Youtube, 
-  BookOpen, 
-  TrendingUp, 
+import {
+  Search,
+  Link2,
+  Pin,
+  FolderClosed,
+  ArrowRight,
+  Sparkles,
+  Youtube,
+  BookOpen,
+  TrendingUp,
   FileText,
   Clock,
   Plus
 } from "lucide-react";
 import { dbService } from "@/lib/services/database/db-service";
+import { supabase } from "@/lib/supabase/client";
 import { Workspace, ResearchTopic, Reference } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
+import { cn } from "@/lib/utils";
 
 export default function DashboardPage() {
   const router = useRouter();
-  
+  const inputRef = useRef<HTMLInputElement>(null);
+
   // Data State
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [pinnedWorkspaces, setPinnedWorkspaces] = useState<Workspace[]>([]);
   const [recentReferences, setRecentReferences] = useState<Reference[]>([]);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [urlInput, setUrlInput] = useState("");
-  const [isSubmittingUrl, setIsSubmittingUrl] = useState(false);
-  const [urlStatus, setUrlStatus] = useState<string | null>(null);
+  
+  const [searchMode, setSearchMode] = useState<"research" | "analyze">("research");
+  const [searchInput, setSearchInput] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState<string | null>(null);
+
+  const [userName, setUserName] = useState<string | null>(null);
+  const [greeting, setGreeting] = useState("Good afternoon");
+
+  useEffect(() => {
+    const hour = new Date().getHours();
+    if (hour >= 5 && hour < 12) {
+      setGreeting("Good morning");
+    } else if (hour >= 12 && hour < 17) {
+      setGreeting("Good afternoon");
+    } else {
+      setGreeting("Good evening");
+    }
+  }, []);
 
   useEffect(() => {
     loadData();
+    fetchUser();
   }, []);
+
+  async function fetchUser() {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const fullName = user.user_metadata?.full_name || user.user_metadata?.name || null;
+        if (fullName) {
+          const firstName = fullName.split(" ")[0];
+          setUserName(firstName);
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
 
   async function loadData() {
     const ws = await dbService.getWorkspaces();
     setWorkspaces(ws);
     setPinnedWorkspaces(ws.filter(w => w.is_pinned));
-    
+
     // Load recent references from all topics
     const allRefs: Reference[] = [];
     for (const w of ws) {
@@ -71,139 +105,219 @@ export default function DashboardPage() {
     loadData();
   }
 
-  async function handleUrlSubmit(e: React.FormEvent) {
+  const handleModeSwitch = (mode: "research" | "analyze") => {
+    setSearchMode(mode);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 0);
+  };
+
+  async function handleSearchSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!urlInput.trim()) return;
-    setIsSubmittingUrl(true);
-    setUrlStatus("Extracting content...");
+    if (!searchInput.trim()) return;
+    setIsSubmitting(true);
+    setSubmitStatus(searchMode === "research" ? "Creating workspace..." : "Extracting content...");
 
     try {
-      // If there are no workspaces, create a default one
-      let targetWs = workspaces[0];
-      if (!targetWs) {
-        targetWs = await dbService.createWorkspace("My Research Workspace", "Default workspace created automatically.");
+      if (searchMode === "research") {
+        const title = searchInput.trim();
+        const targetWs = await dbService.createWorkspace(title, "Automatically generated research workspace.");
+        const targetTopic = await dbService.createTopic(targetWs.id, title, "Primary research thread.");
+        
+        setSubmitStatus("Workspace created! Redirecting...");
+        setSearchInput("");
+        setTimeout(() => {
+          setSubmitStatus(null);
+          loadData();
+          router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
+        }, 800);
+      } else {
+        let targetWs = workspaces[0];
+        if (!targetWs) {
+          targetWs = await dbService.createWorkspace("My Research Workspace", "Default workspace created automatically.");
+        }
+
+        const topics = await dbService.getTopics(targetWs.id);
+        let targetTopic = topics[0];
+        if (!targetTopic) {
+          targetTopic = await dbService.createTopic(targetWs.id, "Web Collections", "Topic created for fast URL dumps.");
+        }
+
+        let type: "youtube" | "link" = "link";
+        let title = "Web Page Article";
+
+        if (searchInput.includes("youtube.com") || searchInput.includes("youtu.be")) {
+          type = "youtube";
+          title = "YouTube Video Analysis";
+        } else if (searchInput.includes("reddit.com")) {
+          title = "Reddit Discussion Thread";
+        }
+
+        const cleanUrl = searchInput.trim();
+        title = `${title}: ${cleanUrl.replace("https://", "").split("/")[0]}`;
+
+        await dbService.addReference(targetTopic.id, title, cleanUrl, type);
+
+        setSubmitStatus("Saved to Web Collections!");
+        setSearchInput("");
+        setTimeout(() => {
+          setSubmitStatus(null);
+          loadData();
+          router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}`);
+        }, 1200);
       }
-
-      // If there are no topics in this workspace, create a default one
-      const topics = await dbService.getTopics(targetWs.id);
-      let targetTopic = topics[0];
-      if (!targetTopic) {
-        targetTopic = await dbService.createTopic(targetWs.id, "Web Collections", "Topic created for fast URL dumps.");
-      }
-
-      // Classify url
-      let type: "youtube" | "link" = "link";
-      let title = "Web Page Article";
-      
-      if (urlInput.includes("youtube.com") || urlInput.includes("youtu.be")) {
-        type = "youtube";
-        title = "YouTube Video Analysis";
-      } else if (urlInput.includes("reddit.com")) {
-        title = "Reddit Discussion Thread";
-      }
-
-      // Extract details mock
-      const cleanUrl = urlInput.trim();
-      title = `${title}: ${cleanUrl.replace("https://", "").split("/")[0]}`;
-
-      await dbService.addReference(targetTopic.id, title, cleanUrl, type);
-      
-      setUrlStatus("Saved to Web Collections!");
-      setUrlInput("");
-      setTimeout(() => {
-        setUrlStatus(null);
-        loadData();
-        router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}`);
-      }, 1200);
     } catch (err) {
-      setUrlStatus("Failed to save reference.");
+      setSubmitStatus("An error occurred.");
     } finally {
-      setIsSubmittingUrl(false);
+      setIsSubmitting(false);
     }
   }
 
-  // Filtered workspaces for search
-  const filteredWorkspaces = workspaces.filter(w => 
-    w.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    (w.description && w.description.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
-
   return (
     <div className="flex-1 p-6 md:p-10 max-w-5xl mx-auto w-full space-y-8 select-none">
-      
+
       {/* Header Greeting */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-border/60 pb-6">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">Studio Dashboard</h1>
-          <p className="text-xs text-muted-foreground mt-1">Welcome back. Continue your structured research projects.</p>
+          <h1 className="text-lg font-bold tracking-tight">
+            {userName ? `${greeting}, ${userName}.` : `${greeting}.`}
+          </h1>
+          <p className="text-xs text-muted-foreground mt-1">Research a new topic or analyze existing content.</p>
         </div>
-        <Button 
-          size="sm" 
+        <Button
+          size="sm"
           onClick={handleCreateWorkspace}
-          className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold text-xs h-8 flex items-center gap-1.5 self-start md:self-auto"
+          className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold text-[11px] h-7 px-3 flex items-center gap-1.5 self-start md:self-auto"
         >
-          <Plus className="w-3.5 h-3.5" />
+          <Plus className="w-3 h-3" />
           <span>New Workspace</span>
         </Button>
       </div>
 
-      {/* Large Input Actions Section */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Search Card */}
-        <div className="bg-card border border-border p-4.5 rounded-[var(--radius)] flex flex-col justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-foreground font-semibold text-xs mb-3">
-              <Search className="w-4 h-4 text-primary" />
-              <span>Workspace Search</span>
+      {/* Unified Search Section */}
+      <div className="flex justify-center mb-6">
+        <div className="w-full max-w-2xl bg-card/60 backdrop-blur-sm border border-border px-6 py-5 rounded-[var(--radius)] shadow-sm relative overflow-hidden">
+          
+          {/* Segmented Toggle */}
+          <div className="flex items-center justify-center mb-4">
+            <div className="flex gap-4 relative">
+              <button
+                type="button"
+                onClick={() => handleModeSwitch("research")}
+                className={cn(
+                  "relative pb-1.5 text-[11px] font-semibold transition-colors duration-200",
+                  searchMode === "research" ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Research Topic
+                {searchMode === "research" && (
+                  <motion.div
+                    layoutId="activeSearchTab"
+                    className="absolute left-0 right-0 bottom-0 h-[2px] bg-primary"
+                    initial={false}
+                    transition={{ type: "tween", duration: 0.25, ease: "easeInOut" }}
+                  />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleModeSwitch("analyze")}
+                className={cn(
+                  "relative pb-1.5 text-[11px] font-semibold transition-colors duration-200",
+                  searchMode === "analyze" ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Analyze URL
+                {searchMode === "analyze" && (
+                  <motion.div
+                    layoutId="activeSearchTab"
+                    className="absolute left-0 right-0 bottom-0 h-[2px] bg-primary"
+                    initial={false}
+                    transition={{ type: "tween", duration: 0.25, ease: "easeInOut" }}
+                  />
+                )}
+              </button>
             </div>
-            <p className="text-[11px] text-muted-foreground mb-4">
-              Quickly find workspaces, research notes, and transcripts using keywords.
-            </p>
           </div>
-          <div className="relative">
-            <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-muted-foreground/60" />
-            <input 
-              type="text" 
-              placeholder="Search workspaces..." 
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              className="w-full text-xs bg-muted/40 border border-border rounded-[var(--radius)] pl-8.5 pr-3.5 py-2 focus:outline-none focus:border-primary text-foreground placeholder:text-muted-foreground/50"
-            />
-          </div>
-        </div>
 
-        {/* Paste URL Card */}
-        <div className="bg-card border border-border p-4.5 rounded-[var(--radius)] flex flex-col justify-between">
-          <div>
-            <div className="flex items-center gap-2 text-foreground font-semibold text-xs mb-3">
-              <Link2 className="w-4 h-4 text-secondary" />
-              <span>Quick URL Collector</span>
+          {/* Search Form */}
+          <form onSubmit={handleSearchSubmit} className="relative flex gap-2">
+            <div className="absolute left-3.5 top-[11px] flex items-center justify-center pointer-events-none">
+              <AnimatePresence mode="wait">
+                {searchMode === "research" ? (
+                  <motion.div
+                    key="search-icon"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <Search className="w-4 h-4 text-muted-foreground/60" />
+                  </motion.div>
+                ) : (
+                  <motion.div
+                    key="link-icon"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.8 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    <Link2 className="w-4 h-4 text-muted-foreground/60" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
-            <p className="text-[11px] text-muted-foreground mb-4">
-              Paste articles, YouTube videos, or Reddit threads to instantly add them to references.
-            </p>
-          </div>
-          <form onSubmit={handleUrlSubmit} className="relative flex gap-2">
-            <input 
-              type="url" 
+            
+            {/* Custom animated placeholder overlay */}
+            {!searchInput && (
+              <div className="absolute left-9 top-[11px] pointer-events-none flex items-center overflow-hidden text-muted-foreground/50 text-[13px]">
+                <AnimatePresence mode="wait">
+                  <motion.span
+                    key={searchMode}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    {searchMode === "research" 
+                      ? "Research AI Agents, System Design, Startups..." 
+                      : "Paste a YouTube, LinkedIn, X, Reddit or Instagram URL..."}
+                  </motion.span>
+                </AnimatePresence>
+              </div>
+            )}
+            
+            <input
+              ref={inputRef}
+              type={searchMode === "analyze" ? "url" : "text"}
               required
-              placeholder="https://youtube.com/watch?..." 
-              value={urlInput}
-              onChange={e => setUrlInput(e.target.value)}
-              className="flex-1 text-xs bg-muted/40 border border-border rounded-[var(--radius)] px-3 py-2 focus:outline-none focus:border-primary text-foreground placeholder:text-muted-foreground/50"
-              disabled={isSubmittingUrl}
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
+              className="flex-1 text-[13px] bg-muted/40 border border-border rounded-full pl-9 pr-3 py-2 hover:border-primary/50 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/30 text-foreground transition-all duration-200"
+              disabled={isSubmitting}
             />
-            <Button 
-              type="submit" 
-              size="sm" 
-              className="h-8.5 px-3 bg-secondary hover:bg-secondary/90 text-secondary-foreground text-xs font-semibold shrink-0"
-              disabled={isSubmittingUrl}
+            <Button
+              type="submit"
+              className="h-[38px] px-5 min-w-[90px] rounded-full bg-primary hover:bg-primary/90 text-primary-foreground text-[13px] font-semibold shrink-0 relative overflow-hidden flex items-center justify-center"
+              disabled={isSubmitting}
             >
-              Collect
+              <AnimatePresence mode="wait">
+                <motion.span
+                  key={searchMode}
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -15 }}
+                  transition={{ duration: 0.2 }}
+                  className="block"
+                >
+                  {searchMode === "research" ? "Research" : "Analyze"}
+                </motion.span>
+              </AnimatePresence>
             </Button>
-            {urlStatus && (
-              <span className="absolute bottom-[-18px] left-0 text-[10px] font-medium text-primary">
-                {urlStatus}
+            
+            {submitStatus && (
+              <span className="absolute -bottom-5 left-4 text-[10px] font-medium text-primary">
+                {submitStatus}
               </span>
             )}
           </form>
@@ -217,16 +331,16 @@ export default function DashboardPage() {
           <span>Active & Pinned Workspaces</span>
         </div>
 
-        {filteredWorkspaces.length > 0 ? (
+        {workspaces.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredWorkspaces.map(ws => (
+            {workspaces.slice(0, 6).map(ws => (
               <Card key={ws.id} className="hover:border-primary/20 bg-card border-border transition-all p-5 rounded-[var(--radius)] relative flex flex-col justify-between min-h-[120px] group">
                 <div>
                   <div className="flex items-start justify-between gap-2">
                     <Link href={`/workspace/${ws.id}`} className="hover:text-primary transition-colors">
                       <h3 className="text-xs font-bold text-foreground line-clamp-1">{ws.title}</h3>
                     </Link>
-                    <button 
+                    <button
                       onClick={() => handleTogglePin(ws.id)}
                       className="p-1 rounded-[calc(var(--radius)-4px)] hover:bg-[#141414] text-muted-foreground group-hover:opacity-100 transition-opacity"
                     >
@@ -250,7 +364,7 @@ export default function DashboardPage() {
         ) : (
           <div className="py-12 border border-dashed border-border bg-card/10 rounded-[var(--radius)] text-center">
             <FolderClosed className="w-8 h-8 text-muted-foreground/50 mx-auto mb-2" />
-            <p className="text-xs text-muted-foreground">No workspaces match your query.</p>
+            <p className="text-xs text-muted-foreground">No workspaces found.</p>
             <Button variant="link" onClick={handleCreateWorkspace} className="text-xs text-primary font-bold mt-1">
               Create your first Workspace
             </Button>
