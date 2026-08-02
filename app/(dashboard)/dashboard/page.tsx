@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { dbService } from "@/lib/services/database/db-service";
 import { supabase } from "@/lib/supabase/client";
-import { Workspace, ResearchTopic, Reference } from "@/types";
+import { Workspace, ResearchTopic, Reference, UrlAnalysis } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { motion, AnimatePresence } from "framer-motion";
@@ -38,9 +38,19 @@ export default function DashboardPage() {
   const [searchInput, setSearchInput] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
+  
+  const [recentAnalyses, setRecentAnalyses] = useState<UrlAnalysis[]>([]);
+  const [duplicateAnalysis, setDuplicateAnalysis] = useState<UrlAnalysis | null>(null);
 
   const [userName, setUserName] = useState<string | null>(null);
   const [greeting, setGreeting] = useState("Good afternoon");
+
+  // Smarter Workspace Creation State
+  const [isResearchModalOpen, setIsResearchModalOpen] = useState(false);
+  const [researchQuery, setResearchQuery] = useState("");
+  const [wsSearchQuery, setWsSearchQuery] = useState("");
+  const [workspaceCreationPreference, setWorkspaceCreationPreference] = useState<"ask" | "always_new" | "always_last">("ask");
+  const [isCreatingResearch, setIsCreatingResearch] = useState(false);
 
   useEffect(() => {
     const hour = new Date().getHours();
@@ -56,6 +66,12 @@ export default function DashboardPage() {
   useEffect(() => {
     loadData();
     fetchUser();
+    const pref = localStorage.getItem("workspace-creation-preference");
+    if (pref) setWorkspaceCreationPreference(pref as any);
+
+    const handleUpdate = () => loadData();
+    window.addEventListener("workspaces-updated", handleUpdate);
+    return () => window.removeEventListener("workspaces-updated", handleUpdate);
   }, []);
 
   async function fetchUser() {
@@ -78,15 +94,17 @@ export default function DashboardPage() {
     setWorkspaces(ws);
     setPinnedWorkspaces(ws.filter(w => w.is_pinned));
 
-    // Load recent references from all topics
-    const allRefs: Reference[] = [];
-    for (const w of ws) {
-      const topics = await dbService.getTopics(w.id);
-      for (const t of topics) {
-        const refs = await dbService.getReferences(t.id);
-        allRefs.push(...refs);
-      }
-    }
+    // Load recent analyses immediately without waiting for references
+    dbService.getAnalyses().then(analyses => {
+      setRecentAnalyses(analyses.slice(0, 4));
+    });
+
+    // Load recent references from all topics in parallel
+    const topicsArrays = await Promise.all(ws.map(w => dbService.getTopics(w.id)));
+    const allTopics = topicsArrays.flat();
+    const refsArrays = await Promise.all(allTopics.map(t => dbService.getReferences(t.id)));
+    const allRefs = refsArrays.flat();
+
     // Sort by created date desc and take top 4
     allRefs.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     setRecentReferences(allRefs.slice(0, 4));
@@ -107,6 +125,7 @@ export default function DashboardPage() {
 
   const handleModeSwitch = (mode: "research" | "analyze") => {
     setSearchMode(mode);
+    setDuplicateAnalysis(null);
     setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
@@ -121,50 +140,37 @@ export default function DashboardPage() {
     try {
       if (searchMode === "research") {
         const title = searchInput.trim();
-        const targetWs = await dbService.createWorkspace(title, "Automatically generated research workspace.");
-        const targetTopic = await dbService.createTopic(targetWs.id, title, "Primary research thread.");
         
-        setSubmitStatus("Workspace created! Redirecting...");
-        setSearchInput("");
-        setTimeout(() => {
-          setSubmitStatus(null);
-          loadData();
-          router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
-        }, 800);
+        if (workspaceCreationPreference === "always_new") {
+          const targetWs = await dbService.createWorkspace(title, "Automatically generated research workspace.");
+          const targetTopic = await dbService.createTopic(targetWs.id, title, "Primary research thread.");
+          
+          setSubmitStatus("Workspace created! Redirecting...");
+          setSearchInput("");
+          setTimeout(() => {
+            setSubmitStatus(null);
+            loadData();
+            router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
+          }, 800);
+        } else {
+          setResearchQuery(title);
+          setIsResearchModalOpen(true);
+          setIsSubmitting(false);
+        }
       } else {
-        let targetWs = workspaces[0];
-        if (!targetWs) {
-          targetWs = await dbService.createWorkspace("My Research Workspace", "Default workspace created automatically.");
-        }
-
-        const topics = await dbService.getTopics(targetWs.id);
-        let targetTopic = topics[0];
-        if (!targetTopic) {
-          targetTopic = await dbService.createTopic(targetWs.id, "Web Collections", "Topic created for fast URL dumps.");
-        }
-
-        let type: "youtube" | "link" = "link";
-        let title = "Web Page Article";
-
-        if (searchInput.includes("youtube.com") || searchInput.includes("youtu.be")) {
-          type = "youtube";
-          title = "YouTube Video Analysis";
-        } else if (searchInput.includes("reddit.com")) {
-          title = "Reddit Discussion Thread";
-        }
-
         const cleanUrl = searchInput.trim();
-        title = `${title}: ${cleanUrl.replace("https://", "").split("/")[0]}`;
+        const existing = await dbService.getAnalysisByUrl(cleanUrl);
+        
+        if (existing) {
+          setDuplicateAnalysis(existing);
+          return;
+        }
 
-        await dbService.addReference(targetTopic.id, title, cleanUrl, type);
-
-        setSubmitStatus("Saved to Web Collections!");
-        setSearchInput("");
+        setSubmitStatus("Redirecting to analysis...");
         setTimeout(() => {
           setSubmitStatus(null);
-          loadData();
-          router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}`);
-        }, 1200);
+          router.push(`/analyze?url=${encodeURIComponent(cleanUrl)}`);
+        }, 500);
       }
     } catch (err) {
       setSubmitStatus("An error occurred.");
@@ -172,6 +178,32 @@ export default function DashboardPage() {
       setIsSubmitting(false);
     }
   }
+
+  async function handleCreateNewWorkspaceFromModal() {
+    setIsCreatingResearch(true);
+    const targetWs = await dbService.createWorkspace(researchQuery, "Automatically generated research workspace.");
+    const targetTopic = await dbService.createTopic(targetWs.id, researchQuery, "Primary research thread.");
+    setSearchInput("");
+    setIsResearchModalOpen(false);
+    loadData();
+    router.push(`/workspace/${targetWs.id}?topic=${targetTopic.id}&tab=research`);
+  }
+
+  async function handleAddToExistingWorkspace(wsId: string) {
+    setIsCreatingResearch(true);
+    const targetTopic = await dbService.createTopic(wsId, researchQuery, "Primary research thread.");
+    setSearchInput("");
+    setIsResearchModalOpen(false);
+    loadData();
+    router.push(`/workspace/${wsId}?topic=${targetTopic.id}&tab=research`);
+  }
+
+  function handlePrefChange(val: "ask" | "always_new") {
+    setWorkspaceCreationPreference(val);
+    localStorage.setItem("workspace-creation-preference", val);
+  }
+
+  const filteredModalWorkspaces = workspaces.filter(ws => ws.title.toLowerCase().includes(wsSearchQuery.toLowerCase()));
 
   return (
     <div className="flex-1 p-6 md:p-10 max-w-5xl mx-auto w-full space-y-8 select-none">
@@ -321,6 +353,64 @@ export default function DashboardPage() {
               </span>
             )}
           </form>
+
+          {/* Duplicate Analysis Prompt */}
+          <AnimatePresence>
+            {duplicateAnalysis && (
+              <motion.div
+                initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                animate={{ opacity: 1, height: "auto", marginTop: 24 }}
+                exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="bg-primary/5 border border-primary/20 rounded-xl p-4">
+                  <div className="flex items-start gap-3">
+                    <Sparkles className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <h3 className="text-sm font-bold text-foreground mb-1">You've already analyzed this source.</h3>
+                      <p className="text-xs text-muted-foreground mb-4">
+                        Last analyzed: {new Date(duplicateAnalysis.created_at).toLocaleDateString()} at {new Date(duplicateAnalysis.created_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                        <br/>What would you like to do?
+                      </p>
+                      
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <Button 
+                          size="sm" 
+                          className="bg-primary hover:bg-primary/90 text-[11px] font-semibold h-8"
+                          onClick={() => router.push(`/analyze?url=${encodeURIComponent(duplicateAnalysis.url)}`)}
+                        >
+                          Open Existing Analysis
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="outline"
+                          className="text-[11px] font-semibold h-8"
+                          onClick={() => {
+                            setDuplicateAnalysis(null);
+                            setSubmitStatus("Redirecting to analysis...");
+                            setTimeout(() => {
+                              router.push(`/analyze?url=${encodeURIComponent(duplicateAnalysis.url)}&refresh=true`);
+                            }, 500);
+                          }}
+                        >
+                          Refresh Analysis
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="ghost"
+                          className="text-[11px] font-semibold h-8 text-muted-foreground hover:text-foreground"
+                          onClick={() => router.push(`/analyze?url=${encodeURIComponent(duplicateAnalysis.url)}&expand=true`)}
+                        >
+                          Expand into Research Workspace
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
         </div>
       </div>
 
@@ -373,9 +463,61 @@ export default function DashboardPage() {
       </div>
 
       {/* References and Logs Row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        {/* Recent Analyses */}
+        <div className="bg-card border border-border rounded-[var(--radius)] p-5">
+          <div className="flex items-center justify-between mb-4 border-b border-border/40 pb-2">
+            <h2 className="text-xs font-bold text-foreground flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-primary" />
+              <span>Recent Analyses</span>
+            </h2>
+            <span className="text-[10px] font-bold text-muted-foreground">{recentAnalyses.length} total</span>
+          </div>
+
+          {recentAnalyses.length > 0 ? (
+            <div className="divide-y divide-border/40">
+              {recentAnalyses.map(analysis => (
+                <div key={analysis.id} className="py-3 first:pt-0 last:pb-0 flex items-start justify-between gap-3 text-xs">
+                  <div className="flex gap-2.5 overflow-hidden">
+                    {analysis.type === "youtube" ? (
+                      <Youtube className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    ) : analysis.type === "reddit" ? (
+                      <Link2 className="w-4 h-4 text-orange-500 shrink-0 mt-0.5" />
+                    ) : (
+                      <BookOpen className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                    )}
+                    <div className="overflow-hidden">
+                      <span className="font-semibold text-foreground block truncate">{analysis.title || analysis.url.replace("https://", "").split("/")[0]}</span>
+                      <span className="text-[10px] text-muted-foreground/80 block mt-0.5 uppercase tracking-wider">
+                        {analysis.type}{analysis.creator ? ` • ${analysis.creator}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className="text-[10px] text-muted-foreground/60 font-medium">
+                      {new Date(analysis.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+                    </span>
+                    <button 
+                      className="text-[10px] text-primary hover:underline font-semibold flex items-center gap-1"
+                      onClick={() => router.push(`/analyze?url=${encodeURIComponent(analysis.url)}`)}
+                    >
+                      Open Analysis <ArrowRight className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-10">
+              <Link2 className="w-6 h-6 text-muted-foreground/50 mx-auto mb-1.5" />
+              <p className="text-[11px] text-muted-foreground">No analyses performed yet.</p>
+            </div>
+          )}
+        </div>
+
         {/* Recent References */}
-        <div className="bg-card border border-border rounded-[var(--radius)] p-5 md:col-span-2">
+        <div className="bg-card border border-border rounded-[var(--radius)] p-5">
           <div className="flex items-center justify-between mb-4 border-b border-border/40 pb-2">
             <h2 className="text-xs font-bold text-foreground flex items-center gap-1.5">
               <BookOpen className="w-4 h-4 text-primary" />
@@ -415,28 +557,118 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Brand/Integration Info panel */}
-        <div className="bg-card border border-border rounded-[var(--radius)] p-5 flex flex-col justify-between">
-          <div>
-            <div className="flex items-center gap-1.5 text-xs font-bold text-foreground mb-4 border-b border-border/40 pb-2">
-              <Sparkles className="w-4 h-4 text-primary" />
-              <span>Brand Guidelines</span>
-            </div>
-            <div className="bg-muted/40 p-3 border border-border rounded-[calc(var(--radius)-4px)] space-y-2">
-              <span className="text-[10px] font-bold text-primary block">ACTIVE VOICE PROFILE</span>
-              <span className="text-xs font-bold text-foreground block">Tech Architect Voice</span>
-              <p className="text-[10px] text-muted-foreground leading-relaxed line-clamp-4">
-                Professional, dense, direct, highly technical, and calm. Explains complex concepts with zero fluff. Focuses on architecture, trade-offs, and metrics.
-              </p>
-            </div>
-          </div>
-          <Link href="/settings" className="mt-4">
-            <Button variant="outline" className="w-full h-8 text-[11px] font-bold">
-              Edit Voice Guidelines
-            </Button>
-          </Link>
-        </div>
       </div>
+
+      {/* Smarter Workspace Creation Modal */}
+      <AnimatePresence>
+        {isResearchModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+              onClick={() => !isCreatingResearch && setIsResearchModalOpen(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-lg bg-card border border-border rounded-xl shadow-xl overflow-hidden flex flex-col max-h-[80vh]"
+            >
+              <div className="p-5 border-b border-border/50 bg-muted/20">
+                <h3 className="text-lg font-bold text-foreground">Where would you like to save this research?</h3>
+                <p className="text-xs text-muted-foreground mt-1">
+                  You searched for: <span className="font-semibold text-primary">"{researchQuery}"</span>
+                </p>
+              </div>
+
+              <div className="p-5 flex-1 overflow-y-auto space-y-6">
+                
+                {/* Option 1: Create New */}
+                <div>
+                  <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Option 1</h4>
+                  <button 
+                    onClick={handleCreateNewWorkspaceFromModal}
+                    disabled={isCreatingResearch}
+                    className="w-full flex items-center justify-between p-4 rounded-lg border border-border bg-card hover:border-primary/50 hover:bg-primary/5 transition-all text-left group"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
+                        <FolderClosed className="w-5 h-5 text-primary" />
+                      </div>
+                      <div>
+                        <span className="text-sm font-bold block mb-0.5">Create New Workspace</span>
+                        <span className="text-[10px] text-muted-foreground">Start a brand new research hub.</span>
+                      </div>
+                    </div>
+                    <ArrowRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                  </button>
+                </div>
+
+                {/* Option 2: Add to Existing */}
+                <div>
+                  <h4 className="text-xs font-bold text-muted-foreground uppercase tracking-widest mb-3">Option 2: Add to Existing Workspace</h4>
+                  
+                  <div className="relative mb-3">
+                    <Search className="absolute left-3 top-2.5 w-4 h-4 text-muted-foreground/60" />
+                    <input 
+                      type="text"
+                      placeholder="Search workspaces..."
+                      value={wsSearchQuery}
+                      onChange={(e) => setWsSearchQuery(e.target.value)}
+                      className="w-full text-xs bg-muted/40 border border-border rounded-md pl-9 pr-3 py-2.5 focus:outline-none focus:border-primary text-foreground"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 max-h-[200px] overflow-y-auto pr-1">
+                    {filteredModalWorkspaces.length > 0 ? (
+                      filteredModalWorkspaces.map(ws => (
+                        <button
+                          key={ws.id}
+                          onClick={() => handleAddToExistingWorkspace(ws.id)}
+                          disabled={isCreatingResearch}
+                          className="w-full flex items-center justify-between p-2.5 rounded border border-transparent hover:border-border hover:bg-muted/50 transition-all text-left group"
+                        >
+                          <div className="flex items-center gap-2 overflow-hidden">
+                            <FolderClosed className="w-4 h-4 text-muted-foreground group-hover:text-foreground shrink-0" />
+                            <span className="text-xs font-semibold text-foreground truncate">{ws.title}</span>
+                          </div>
+                          <span className="text-[10px] text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">Select</span>
+                        </button>
+                      ))
+                    ) : (
+                      <p className="text-center text-[11px] text-muted-foreground py-4">No matching workspaces.</p>
+                    )}
+                  </div>
+                </div>
+
+              </div>
+              
+              <div className="p-4 border-t border-border/50 bg-muted/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    className="w-3.5 h-3.5 rounded border-border text-primary focus:ring-primary"
+                    checked={workspaceCreationPreference === "always_new"}
+                    onChange={(e) => handlePrefChange(e.target.checked ? "always_new" : "ask")}
+                  />
+                  <span className="text-[10px] font-medium text-muted-foreground">Always create a new workspace</span>
+                </label>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => setIsResearchModalOpen(false)}
+                  disabled={isCreatingResearch}
+                  className="h-8 text-xs font-semibold"
+                >
+                  Cancel
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

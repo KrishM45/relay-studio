@@ -27,8 +27,20 @@ import {
   Server,
   FlaskConical,
   Play,
-  Pen
+  Pen,
+  MoreHorizontal,
+  Pencil,
+  Copy,
+  Trash2,
+  Check
 } from "lucide-react";
+import { 
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator 
+} from "@/components/ui/dropdown-menu";
 import { dbService } from "@/lib/services/database/db-service";
 import { Workspace } from "@/types";
 import { Button } from "@/components/ui/button";
@@ -49,6 +61,15 @@ export function Sidebar() {
   const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [activeTooltip, setActiveTooltip] = useState<{ text: string; top: number } | null>(null);
   const [isMounted, setIsMounted] = useState(false);
+
+  // Modals state
+  const [renamingWs, setRenamingWs] = useState<{ id: string, title: string } | null>(null);
+  const [renameInput, setRenameInput] = useState("");
+  
+  const [deletingWs, setDeletingWs] = useState<{ id: string, title: string } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
   useEffect(() => {
     const saved = localStorage.getItem("sidebar-state");
     if (saved === null) {
@@ -94,6 +115,10 @@ export function Sidebar() {
 
   useEffect(() => {
     loadWorkspaces();
+    
+    const handleUpdate = () => loadWorkspaces();
+    window.addEventListener("workspaces-updated", handleUpdate);
+    return () => window.removeEventListener("workspaces-updated", handleUpdate);
   }, []);
 
   async function loadWorkspaces() {
@@ -115,6 +140,33 @@ export function Sidebar() {
     e.preventDefault();
     e.stopPropagation();
     await dbService.togglePinWorkspace(id);
+    loadWorkspaces();
+  }
+
+  async function handleRenameWorkspace(e: React.FormEvent) {
+    e.preventDefault();
+    if (!renamingWs || !renameInput.trim()) return;
+    await dbService.renameWorkspace(renamingWs.id, renameInput.trim());
+    setRenamingWs(null);
+    setRenameInput("");
+    loadWorkspaces();
+  }
+
+  async function handleDeleteWorkspace() {
+    if (!deletingWs) return;
+    setIsDeleting(true);
+    await dbService.deleteWorkspace(deletingWs.id);
+    
+    setToastMessage("Workspace deleted successfully.");
+    setTimeout(() => setToastMessage(null), 3000);
+    
+    // Check if we are currently on this workspace
+    if (pathname === `/workspace/${deletingWs.id}` || pathname?.startsWith(`/workspace/${deletingWs.id}/`)) {
+      router.push("/dashboard");
+    }
+
+    setDeletingWs(null);
+    setIsDeleting(false);
     loadWorkspaces();
   }
 
@@ -334,8 +386,10 @@ export function Sidebar() {
                 <WorkspaceLink 
                   key={ws.id} 
                   ws={ws} 
-                  isActive={pathname?.startsWith(`/workspace/${ws.id}`)} 
+                  isActive={pathname?.startsWith(`/workspace/${ws.id}`) || false} 
                   onTogglePin={handleTogglePin}
+                  onRename={(id, title) => { setRenamingWs({ id, title }); setRenameInput(title); }}
+                  onDelete={(id, title) => setDeletingWs({ id, title })}
                   isVisuallyExpanded={isVisuallyExpanded}
                   showTooltip={showTooltip}
                   hideTooltip={hideTooltip}
@@ -356,8 +410,10 @@ export function Sidebar() {
                 <WorkspaceLink 
                   key={ws.id} 
                   ws={ws} 
-                  isActive={pathname?.startsWith(`/workspace/${ws.id}`)} 
+                  isActive={pathname?.startsWith(`/workspace/${ws.id}`) || false} 
                   onTogglePin={handleTogglePin}
+                  onRename={(id, title) => { setRenamingWs({ id, title }); setRenameInput(title); }}
+                  onDelete={(id, title) => setDeletingWs({ id, title })}
                   isVisuallyExpanded={isVisuallyExpanded}
                   showTooltip={showTooltip}
                   hideTooltip={hideTooltip}
@@ -386,7 +442,16 @@ export function Sidebar() {
                       </Button>
                     </>
                   ) : (
-                    <span className="text-[11px]">No workspaces found. Click + to create one.</span>
+                    <div className="flex flex-col items-center justify-center p-2 text-center text-muted-foreground">
+                      <FolderClosed className="w-8 h-8 mb-3 opacity-20" />
+                      <span className="text-xs font-semibold mb-1">No workspaces yet.</span>
+                      <span className="text-[10px] opacity-70 mb-4 max-w-[150px]">Research your first topic to create one.</span>
+                      <Link href="/dashboard">
+                        <Button size="sm" className="h-6 text-[10px] px-3 font-semibold w-full">
+                          Start Research &rarr;
+                        </Button>
+                      </Link>
+                    </div>
                   )}
                 </div>
               )
@@ -428,6 +493,89 @@ export function Sidebar() {
           {activeTooltip.text}
         </div>
       )}
+
+      {/* Rename Modal */}
+      <AnimatePresence>
+        {renamingWs && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center px-4">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+              onClick={() => setRenamingWs(null)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-sm bg-card border border-border rounded-xl shadow-xl overflow-hidden p-5"
+            >
+              <h3 className="text-sm font-bold text-foreground mb-4">Rename Workspace</h3>
+              <form onSubmit={handleRenameWorkspace}>
+                <input 
+                  type="text" 
+                  value={renameInput}
+                  onChange={(e) => setRenameInput(e.target.value)}
+                  className="w-full text-xs bg-muted/50 border border-border rounded px-3 py-2 mb-4 focus:outline-none focus:border-primary text-foreground"
+                  autoFocus
+                />
+                <div className="flex justify-end gap-2">
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setRenamingWs(null)}>Cancel</Button>
+                  <Button type="submit" size="sm" className="bg-primary">Save Changes</Button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Delete Modal */}
+      <AnimatePresence>
+        {deletingWs && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center px-4">
+            <motion.div 
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-background/80 backdrop-blur-sm"
+              onClick={() => setDeletingWs(null)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-sm bg-card border border-destructive/20 rounded-xl shadow-xl overflow-hidden p-5"
+            >
+              <h3 className="text-lg font-bold text-foreground mb-1">Delete Workspace?</h3>
+              <p className="text-xs text-foreground font-semibold mb-4 bg-muted/40 p-2 rounded-md">&quot;{deletingWs.title}&quot;</p>
+              <p className="text-xs text-muted-foreground mb-3">This will permanently remove:</p>
+              <ul className="text-xs text-muted-foreground list-disc pl-5 space-y-1 mb-5">
+                <li>Research Topics</li>
+                <li>References</li>
+                <li>Notes</li>
+                <li>Generated Content</li>
+              </ul>
+              <p className="text-xs font-bold text-destructive mb-6">This action cannot be undone.</p>
+              
+              <div className="flex justify-end gap-2">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setDeletingWs(null)} disabled={isDeleting}>Cancel</Button>
+                <Button type="button" variant="destructive" size="sm" onClick={handleDeleteWorkspace} disabled={isDeleting}>
+                  {isDeleting ? "Deleting..." : "Delete Workspace"}
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Toast Notification */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }}
+            className="fixed bottom-6 right-6 bg-card border border-border text-foreground px-4 py-3 rounded-lg shadow-lg flex items-center gap-3 z-[110]"
+          >
+            <div className="w-5 h-5 rounded-full bg-green-500/20 flex items-center justify-center">
+              <Check className="w-3 h-3 text-green-500" />
+            </div>
+            <span className="text-xs font-semibold">{toastMessage}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
     </aside>
   );
 }
@@ -436,6 +584,8 @@ interface WorkspaceLinkProps {
   ws: Workspace;
   isActive: boolean;
   onTogglePin: (e: React.MouseEvent, id: string) => void;
+  onRename: (id: string, title: string) => void;
+  onDelete: (id: string, title: string) => void;
   isVisuallyExpanded: boolean;
   showTooltip: (e: React.MouseEvent, text: string) => void;
   hideTooltip: () => void;
@@ -458,51 +608,115 @@ function getWorkspaceIcon(title: string) {
   return null;
 }
 
-function WorkspaceLink({ ws, isActive, onTogglePin, isVisuallyExpanded, showTooltip, hideTooltip }: WorkspaceLinkProps) {
+function WorkspaceLink({ ws, isActive, onTogglePin, onRename, onDelete, isVisuallyExpanded, showTooltip, hideTooltip }: WorkspaceLinkProps) {
   const Icon = getWorkspaceIcon(ws.title);
   const initial = ws.title.charAt(0).toUpperCase();
 
+  const [isOpen, setIsOpen] = useState(false);
+
   return (
-    <Link 
-      href={`/workspace/${ws.id}`}
-      onMouseEnter={(e) => showTooltip(e, ws.title)}
-      onMouseLeave={hideTooltip}
-      className={cn(
-        "relative group w-full flex items-center rounded-[calc(var(--radius)-4px)] text-xs font-medium border transition-all duration-200 overflow-hidden",
-        isActive 
-          ? "bg-accent/30 border-border/50 text-foreground font-semibold shadow-sm" 
-          : "text-muted-foreground border-transparent hover:bg-card/60 hover:text-foreground hover:-translate-y-[1px] hover:shadow-sm",
-        isVisuallyExpanded ? "px-2.5 py-1.5 justify-between" : "p-2 justify-center"
-      )}
-    >
-      {isActive && (
-        <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-primary rounded-r-full" />
-      )}
-      <div className={cn("flex items-center gap-2 overflow-hidden", isVisuallyExpanded ? "pr-2" : "")}>
-        {Icon ? (
-          <Icon className={cn("w-3.5 h-3.5 shrink-0 transition-colors duration-200", isActive ? "text-primary" : "text-muted-foreground/80 group-hover:text-foreground/90")} />
-        ) : (
-          <div className={cn("w-3.5 h-3.5 shrink-0 rounded-full flex items-center justify-center border transition-all duration-200", isActive ? "bg-primary border-primary" : "bg-primary/10 border-primary/20 group-hover:bg-primary/20 group-hover:border-primary/30")}>
-            <span className={cn("text-[8px] font-bold leading-none", isActive ? "text-primary-foreground" : "text-primary")}>{initial}</span>
-          </div>
+    <div className="relative group w-full">
+      <Link 
+        href={`/workspace/${ws.id}`}
+        onMouseEnter={(e) => showTooltip(e, ws.title)}
+        onMouseLeave={hideTooltip}
+        className={cn(
+          "w-full flex items-center rounded-[calc(var(--radius)-4px)] text-xs font-medium border transition-all duration-200 overflow-hidden",
+          isActive 
+            ? "bg-accent/30 border-border/50 text-foreground font-semibold shadow-sm" 
+            : "text-muted-foreground border-transparent hover:bg-card/60 hover:text-foreground hover:-translate-y-[1px] hover:shadow-sm",
+          isVisuallyExpanded ? "px-2.5 py-1.5 justify-between" : "p-2 justify-center",
+          isOpen ? "bg-card/60 text-foreground" : ""
         )}
-        {isVisuallyExpanded && <span className={cn("truncate whitespace-nowrap transition-colors duration-200", isActive && "text-foreground")}>{ws.title}</span>}
-      </div>
+      >
+        {isActive && (
+          <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-primary rounded-r-full" />
+        )}
+        <div className={cn("flex items-center gap-2 overflow-hidden", isVisuallyExpanded ? "pr-8" : "")}>
+          {Icon ? (
+            <Icon className={cn("w-3.5 h-3.5 shrink-0 transition-colors duration-200", isActive ? "text-primary" : "text-muted-foreground/80 group-hover:text-foreground/90")} />
+          ) : (
+            <div className={cn("w-3.5 h-3.5 shrink-0 rounded-full flex items-center justify-center border transition-all duration-200", isActive ? "bg-primary border-primary" : "bg-primary/10 border-primary/20 group-hover:bg-primary/20 group-hover:border-primary/30")}>
+              <span className={cn("text-[8px] font-bold leading-none", isActive ? "text-primary-foreground" : "text-primary")}>{initial}</span>
+            </div>
+          )}
+          {isVisuallyExpanded && <span className={cn("truncate whitespace-nowrap transition-colors duration-200", isActive && "text-foreground")}>{ws.title}</span>}
+        </div>
+      </Link>
       
       {isVisuallyExpanded && (
-        <div className="flex items-center gap-1.5 shrink-0">
-          <button 
-            onClick={(e) => onTogglePin(e, ws.id)}
-            className={cn(
-              "p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-card hover:text-foreground",
-              ws.is_pinned && "opacity-100 text-primary"
-            )}
-          >
-            <Pin className={cn("w-3 h-3", ws.is_pinned ? "fill-primary text-primary" : "text-muted-foreground")} />
-          </button>
-          <ChevronRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-60 transition-opacity" />
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1.5 shrink-0 z-10 pointer-events-none group-hover:pointer-events-auto">
+          {ws.is_pinned && !isOpen && (
+            <Pin className="w-3 h-3 fill-primary text-primary opacity-100 transition-opacity group-hover:opacity-0" />
+          )}
+          
+          <DropdownMenu open={isOpen} onOpenChange={setIsOpen}>
+            <DropdownMenuTrigger
+              className={cn(
+                "p-0.5 rounded opacity-0 transition-opacity hover:bg-card hover:text-foreground outline-none pointer-events-auto",
+                (isOpen || ws.is_pinned) ? "absolute right-0" : "group-hover:opacity-100",
+                isOpen ? "opacity-100" : ""
+              )}
+            >
+              <MoreHorizontal className="w-3.5 h-3.5 text-muted-foreground" />
+            </DropdownMenuTrigger>
+            
+            <DropdownMenuContent align="end" sideOffset={5} className="w-48 bg-card border border-border rounded-lg shadow-xl p-1 z-[100] pointer-events-auto">
+              <DropdownMenuItem 
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onRename(ws.id, ws.title);
+                  setIsOpen(false);
+                }}
+                className="text-xs font-medium cursor-pointer flex items-center gap-2 p-2 rounded-md hover:bg-muted focus:bg-muted"
+              >
+                <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
+                <span>Rename Workspace</span>
+              </DropdownMenuItem>
+              
+              <DropdownMenuItem 
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onTogglePin(e as any, ws.id);
+                  setIsOpen(false);
+                }}
+                className="text-xs font-medium cursor-pointer flex items-center gap-2 p-2 rounded-md hover:bg-muted focus:bg-muted"
+              >
+                <Pin className="w-3.5 h-3.5 text-muted-foreground" />
+                <span>{ws.is_pinned ? "Unpin Workspace" : "Pin Workspace"}</span>
+              </DropdownMenuItem>
+              
+              <DropdownMenuItem 
+                disabled
+                className="text-xs font-medium cursor-not-allowed flex items-center justify-between gap-2 p-2 rounded-md opacity-50"
+              >
+                <div className="flex items-center gap-2">
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Duplicate</span>
+                </div>
+                <span className="text-[9px] uppercase tracking-wider font-bold">Soon</span>
+              </DropdownMenuItem>
+              
+              <DropdownMenuSeparator className="bg-border/50 my-1" />
+              
+              <DropdownMenuItem 
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onDelete(ws.id, ws.title);
+                  setIsOpen(false);
+                }}
+                className="text-xs font-medium cursor-pointer flex items-center gap-2 p-2 rounded-md text-destructive hover:bg-destructive/10 focus:bg-destructive/10 focus:text-destructive"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Workspace</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       )}
-    </Link>
+    </div>
   );
 }
